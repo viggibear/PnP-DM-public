@@ -15,7 +15,7 @@ class GaussialBlurCircular(LinearOperator):
         self.kernel = Blurkernel(
             blur_type='gaussian',
             kernel_size=kernel_size,
-            std=intensity, 
+            std=intensity,
             channel=channels
         ).get_kernel()
         pre1 = (img_dim-self.kernel.shape[0])//2
@@ -34,7 +34,7 @@ class GaussialBlurCircular(LinearOperator):
 
     def transpose(self, y):
         return fftshift(ifft2(torch.conj(self.full_spectrum) * fft2(y)).real, dim=(-2,-1))
-    
+
     def proximal_generator(self, x, y, sigma, rho):
         power = self.full_spectrum * torch.conj(self.full_spectrum)
         inv_spectrum = 1 / ((power / sigma**2) + (torch.ones_like(x) / rho**2))

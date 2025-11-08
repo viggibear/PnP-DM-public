@@ -3,7 +3,7 @@ import numpy as np
 from glob import glob
 from PIL import Image
 from typing import Callable, Optional
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import VisionDataset
 
 
@@ -26,8 +26,8 @@ def get_dataset(name: str, root: str, **kwargs):
 
 def get_dataloader(
         dataset: VisionDataset,
-        batch_size: int, 
-        num_workers: int, 
+        batch_size: int,
+        num_workers: int,
         train: bool
     ):
     return DataLoader(
@@ -67,8 +67,34 @@ class FFHQDataset(VisionDataset):
         else:
             img = Image.open(fpath).convert('RGB')
             img = torch.from_numpy(np.array(img).astype(np.float32)).permute(2, 0, 1) / 255.0
-        
+
         if self.transform is not None:
             img = self.transform(img)
-        
+
         return img
+
+class ECMMDDataset(VisionDataset):
+    def __init__(self, dataset: VisionDataset, eta_dim: int, operator: Callable, noiser: Callable):
+        self.dataset = dataset
+        self.eta = torch.randn(len(dataset), eta_dim, eta_dim)
+        self.operator = operator
+        self.noiser = noiser
+
+        # Set a fixed noise seed for each image for reproducibility
+        g = torch.Generator().manual_seed(42)
+        self.noise_seed = torch.randint(0, 2 ** 31 - 1, (len(dataset),), generator=g)
+
+    @property
+    def display_name(self):
+        return self.dataset.display_name + f'-eta{self.eta.shape[1]}-ecmmd'
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index: int):
+        img = self.dataset[index]
+        eta = self.eta[index]
+        noise_seed = self.noise_seed[index]
+        torch.manual_seed(noise_seed)
+        dirty = self.noiser(self.operator.forward(img))
+        return img, dirty, eta

@@ -45,7 +45,7 @@ class PnPEDM:
         z_save = torch.zeros_like(x_save)
         for name, metric in metrics.items():
             log[name].append(metric(x_save, inv_transform(gt)).item())
-        
+
         xs_save = torch.cat((inv_transform(gt), x_save), dim=-1)
         try:
             zs_save = torch.cat((inv_transform(y_n.reshape(*gt.shape)), z_save), dim=-1)
@@ -61,9 +61,9 @@ class PnPEDM:
 
         samples = []
         iters_count_as_sample = np.linspace(
-            self.config.num_burn_in_iters, 
-            self.config.num_iters-1, 
-            self.config.num_samples_per_run+1, 
+            self.config.num_burn_in_iters,
+            self.config.num_iters-1,
+            self.config.num_samples_per_run+1,
             dtype=int
         )[1:]
         assert self.config.num_iters-1 in iters_count_as_sample, "num_iters-1 should be included in iters_count_as_sample"
@@ -87,11 +87,11 @@ class PnPEDM:
             for name, metric in metrics.items():
                 log[name].append(metric(x_save, inv_transform(gt)).item())
             sub_pbar.set_description(f'running PnP-EDM (xrange=[{x.min().item():.2f}, {x.max().item():.2f}], zrange=[{z.min().item():.2f}, {z.max().item():.2f}]) | psnr: {log["psnr"][-1]:.4f}')
-            
+
             if i % (self.config.num_iters//10) == 0:
                 xs_save = torch.cat((xs_save, x_save), dim=-1)
                 zs_save = torch.cat((zs_save, z_save), dim=-1)
-            
+
             if record:
                 log["x"].append(x_save.permute(0, 2, 3, 1).squeeze().cpu().numpy())
 

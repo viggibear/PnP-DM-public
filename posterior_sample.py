@@ -23,13 +23,14 @@ def posterior_sample(cfg):
     # device setting
     device_str = f"cuda:{cfg.gpu}" if torch.cuda.is_available() else 'cpu'
     device = torch.device(device_str)
-    
+
     # prepare task (forward model and noise)
     operator = get_operator(**task_config.operator, device=device)
     noiser = get_noise(**task_config.noise)
 
     # prepare dataloader
     transform = transforms.Compose([
+        transforms.Resize((256, 256)),
         transforms.Normalize((0.5), (0.5))
     ])
     inv_transform = transforms.Compose([
@@ -42,6 +43,9 @@ def posterior_sample(cfg):
     # ])
     dataset = get_dataset(**data_config, transform=transform)
     num_test_images = len(dataset)
+    # Truncate for quick testing
+    num_test_images = 10
+    dataset.fpaths = dataset.fpaths[:num_test_images]
     dataloader = get_dataloader(dataset, batch_size=1, num_workers=0, train=False)
 
     # load model
@@ -60,7 +64,8 @@ def posterior_sample(cfg):
     os.makedirs(out_path, exist_ok=True)
     for img_dir in ['gt', 'meas', 'recon', 'progress']:
         os.makedirs(os.path.join(out_path, img_dir), exist_ok=True)
-        
+    print(f"Results are saved to {out_path}")
+
     # inference
     meta_log = defaultdict(list)
     meta_log["statistics_based_on_one_sample"] = defaultdict(list)
@@ -102,16 +107,16 @@ def posterior_sample(cfg):
             except:
                 log["meas"] = inv_transform(operator.A_pinv(y_n).reshape(*ref_img.shape)).permute(0, 2, 3, 1).squeeze().cpu().numpy()
                 plt.imsave(os.path.join(out_path, 'meas', file_idx+'_pinv.png'), log["meas"], cmap=cmap)
-        
+
         # sampling
         for j in tqdm(range(cfg.num_runs)):
             samples = sampler(
-                gt=ref_img, 
-                y_n=y_n, 
-                record=cfg.record, 
-                fname=file_idx+f'_run_{j}', 
-                save_root=out_path, 
-                inv_transform=inv_transform, 
+                gt=ref_img,
+                y_n=y_n,
+                record=cfg.record,
+                fname=file_idx+f'_run_{j}',
+                save_root=out_path,
+                inv_transform=inv_transform,
                 metrics=metrics
             )
             samples = inv_transform(samples)

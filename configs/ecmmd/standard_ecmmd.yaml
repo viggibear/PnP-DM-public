@@ -1,0 +1,6 @@
+ecmmd:
+  kernel_type: gaussian
+  sigma: 0.00024414062
+  l1_lambda: 0.02
+knn:
+  k: 5

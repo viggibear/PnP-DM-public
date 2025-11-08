@@ -1,0 +1,13 @@
+gpu: 0
+add_exp_name: ''
+
+train_ratio: 0.7
+val_ratio: 0.1
+epochs: 1000
+eta_dim: 8
+batch_size: 32
+num_workers: 4
+optimizer:
+  name: adamw
+  lr: 1e-4
+  weight_decay: 1e-2

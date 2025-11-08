@@ -1,6 +1,6 @@
 name: pnp_edm
 mode: edm
-num_iters: 100
+num_iters: 20
 num_burn_in_iters: 40
 rho: 0.1
 rho_decay_rate: 1.0
