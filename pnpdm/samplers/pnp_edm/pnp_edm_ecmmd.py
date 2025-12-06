@@ -5,10 +5,11 @@ from tqdm import tqdm
 from collections import defaultdict
 from .denoiser_edm import Denoiser_EDM
 
-class PnPEDM:
-    def __init__(self, config, model, operator, noiser, device):
+class PnPEDMECMMD:
+    def __init__(self, config, model, operator, noiser, device, ecmmd_model):
         self.config = config
         self.model = model
+        self.ecmmd_model = ecmmd_model
         self.operator = operator
         self.noiser = noiser
         self.device = device
@@ -33,9 +34,9 @@ class PnPEDM:
 
     @property
     def display_name(self):
-        return f'pnp-edm-{self.config.mode}-rho0={self.config.rho}-rhomin={self.config.rho_min}'
+        return f'pnp-edm-ecmmd-{self.config.mode}-rho0={self.config.rho}-rhomin={self.config.rho_min}'
 
-    def __call__(self, gt, y_n, record=False, fname=None, save_root=None, inv_transform=None, rho_scale=1.0, metrics={}):
+    def __call__(self, gt, y_n, record=False, fname=None, save_root=None, inv_transform=None, metrics={}):
         log = defaultdict(list)
         cmap = 'gray' if gt.shape[1] == 1 else None
         x = self.operator.initialize(gt, y_n)
@@ -43,6 +44,7 @@ class PnPEDM:
         # logging
         x_save = inv_transform(x)
         z_save = torch.zeros_like(x_save)
+        ecmmd_save = torch.zeros_like(x_save)
         for name, metric in metrics.items():
             log[name].append(metric(x_save, inv_transform(gt)).item())
 
@@ -54,16 +56,13 @@ class PnPEDM:
                 zs_save = torch.cat((inv_transform(self.operator.A_pinv(y_n).reshape(*gt.shape)), z_save), dim=-1)
             except:
                 zs_save = torch.cat((z_save, z_save), dim=-1)
+        ecmmds_save = torch.cat((inv_transform(gt), ecmmd_save), dim=-1)
 
         if record:
             log["gt"] = inv_transform(gt).permute(0, 2, 3, 1).squeeze().cpu().numpy()
             log["x"].append(x_save.permute(0, 2, 3, 1).squeeze().cpu().numpy())
 
         samples = []
-        iters_to_save_intermediate = [5, 6, 7, 8, 9, 10, 15, 16, 17, 18]
-        for i in iters_to_save_intermediate:
-            os.makedirs(os.path.join(save_root, 'progress', f'iter{i}'), exist_ok=True)
-
         iters_count_as_sample = np.linspace(
             self.config.num_burn_in_iters,
             self.config.num_iters-1,
@@ -72,15 +71,19 @@ class PnPEDM:
         )[1:]
         assert self.config.num_iters-1 in iters_count_as_sample, "num_iters-1 should be included in iters_count_as_sample"
         sub_pbar = tqdm(range(self.config.num_iters))
+
         for i in sub_pbar:
-            rho_iter = self.config.rho * (self.config.rho_decay_rate**i) * rho_scale
+            rho_iter = self.config.rho * (self.config.rho_decay_rate**i)
             rho_iter = max(rho_iter, self.config.rho_min)
 
             # likelihood step
             z = self.operator.proximal_generator(x, y_n, self.noiser.sigma, rho_iter)
 
+            # ecmmd step
+            ecmmd = self.ecmmd_model.forward(z, torch.randn(1, self.ecmmd_model.eta_dim).to(z.device))
+
             # prior step
-            x = self.edm(z, rho_iter)
+            x = self.edm(ecmmd, rho_iter)
 
             if i in iters_count_as_sample:
                 samples.append(x)
@@ -88,17 +91,15 @@ class PnPEDM:
             # logging
             x_save = inv_transform(x)
             z_save = inv_transform(z)
+            ecmmd_save = inv_transform(ecmmd)
             for name, metric in metrics.items():
                 log[name].append(metric(x_save, inv_transform(gt)).item())
             sub_pbar.set_description(f'running PnP-EDM (xrange=[{x.min().item():.2f}, {x.max().item():.2f}], zrange=[{z.min().item():.2f}, {z.max().item():.2f}]) | psnr: {log["psnr"][-1]:.4f}')
 
-            if i in iters_to_save_intermediate:
-                plt.imsave(os.path.join(save_root, 'progress', f'iter{i}', f'z_{fname}.png'), z_save.permute(0, 2, 3, 1).squeeze().cpu().numpy(), cmap=cmap)
-                plt.imsave(os.path.join(save_root, 'progress', f'iter{i}', f'{fname}.png'), x_save.permute(0, 2, 3, 1).squeeze().cpu().numpy(), cmap=cmap)
-
             if i % (self.config.num_iters // 5) == 0:
                 xs_save = torch.cat((xs_save, x_save), dim=-1)
                 zs_save = torch.cat((zs_save, z_save), dim=-1)
+                ecmmds_save = torch.cat((ecmmds_save, ecmmd_save), dim=-1)
 
             if record:
                 log["x"].append(x_save.permute(0, 2, 3, 1).squeeze().cpu().numpy())
@@ -117,14 +118,14 @@ class PnPEDM:
         plt.close()
 
         # logging
-        xz_save = torch.cat((xs_save, zs_save), dim=-2).permute(0, 2, 3, 1).squeeze().cpu().numpy()
+        xz_save = torch.cat((xs_save, zs_save, ecmmds_save), dim=-2).permute(0, 2, 3, 1).squeeze().cpu().numpy()
         plt.imsave(os.path.join(save_root, 'progress', fname+"_x_and_z.png"), xz_save, cmap=cmap)
         np.save(os.path.join(save_root, 'progress', fname+"_log.npy"), log)
 
         return torch.concat(samples, dim=0)
 
 
-class PnPEDMBatch(PnPEDM):
+class PnPEDMECMMDBatch(PnPEDMECMMD):
     @property
     def display_name(self):
         return f'pnp-edm-batch-{self.config.mode}-rho0={self.config.rho}-rhomin={self.config.rho_min}'
@@ -141,6 +142,9 @@ class PnPEDMBatch(PnPEDM):
 
             # likelihood step
             z = self.operator.proximal_generator(x, y_n, self.noiser.sigma, rho_iter)
+
+            # ecmmd step
+            z = self.ecmmd_model.forward(z, torch.randn(z.size(0), self.ecmmd_model.eta_dim).to(z.device))
 
             # prior step
             x = self.edm(z, rho_iter)

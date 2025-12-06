@@ -9,7 +9,7 @@ import tqdm as tqdm
 from collections import defaultdict
 from torchvision import transforms
 
-from pnpdm.data import get_dataset, get_dataloader, ECMMDDataset
+from pnpdm.data import ECMMDIterTrainDataset, get_dataset, get_dataloader, ECMMDDataset
 from pnpdm.tasks import get_operator, get_noise
 from pnpdm.ecmmd import get_knn, get_ecmmd
 from pnpdm.models import get_model
@@ -21,6 +21,7 @@ from taming.modules.losses.lpips import LPIPS
 @hydra.main(version_base="1.2", config_path="configs", config_name="train_ecmmd")
 def train_ecmmd(cfg):
     data_config = cfg.data
+    iter_train_ds = cfg.iter_train_dataset
     model_config = cfg.model
     task_config = cfg.task
     ecmmd_config = cfg.ecmmd
@@ -29,6 +30,7 @@ def train_ecmmd(cfg):
     n_epochs = cfg.epochs
     eta_dim = cfg.eta_dim
     optim_config = cfg.optimizer
+    resume_from_checkpoint = cfg.get('resume_from_checkpoint', None)
 
     # device setting
     device_str = f"cuda:{cfg.gpu}" if torch.cuda.is_available() else 'cpu'
@@ -46,7 +48,7 @@ def train_ecmmd(cfg):
 
     # prepare dataloader
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize((256, 256)),
         transforms.Normalize((0.5), (0.5))
     ])
     inv_transform = transforms.Compose([
@@ -55,10 +57,13 @@ def train_ecmmd(cfg):
     ])
 
     dataset = get_dataset(**data_config, transform=transform)
-    dataset = ECMMDDataset(dataset, eta_dim=eta_dim, operator=operator, noiser=noiser)
+    iter_train_ds = get_dataset(**iter_train_ds, transform=transform)
+    # dataset = ECMMDDataset(dataset, eta_dim=eta_dim, operator=operator, noiser=noiser)
+    dataset = ECMMDIterTrainDataset(dataset, iter_train_ds, eta_dim=eta_dim)
 
     # Create results directory structure
     exp_name = f"ecmmd_{dataset.display_name}_{model_config.name}_epochs{n_epochs}"
+    exp_name += f"_{cfg.add_exp_name}" if 'add_exp_name' in cfg else ''
     logger = logging.getLogger(exp_name)
     out_path = os.path.join("results", exp_name)
     os.makedirs(out_path, exist_ok=True)
@@ -89,8 +94,51 @@ def train_ecmmd(cfg):
     train_losses = []
     val_losses = []
     test_metrics_history = defaultdict(list)
+    start_epoch = 0
 
-    for epoch in tqdm.tqdm(range(n_epochs), desc="Training Epochs"):
+    if resume_from_checkpoint:
+        checkpoint_to_load = resume_from_checkpoint
+        metadata_dir = None
+
+        if os.path.isdir(resume_from_checkpoint):
+            checkpoints_dir = os.path.join(resume_from_checkpoint, 'checkpoints')
+            if not os.path.isdir(checkpoints_dir):
+                raise ValueError(f"Checkpoints directory not found: {checkpoints_dir}")
+
+            checkpoint_files = [f for f in os.listdir(checkpoints_dir) if f.startswith('model_epoch_') and f.endswith('.pth')]
+            if not checkpoint_files:
+                raise ValueError(f"No checkpoints found in {checkpoints_dir}")
+
+            # Find the latest epoch by parsing filenames
+            latest_checkpoint_file = sorted(checkpoint_files, key=lambda f: int(f.split('_')[-1].split('.')[0]))[-1]
+            checkpoint_to_load = os.path.join(checkpoints_dir, latest_checkpoint_file)
+            metadata_dir = resume_from_checkpoint
+        else:
+            metadata_dir = os.path.dirname(os.path.dirname(resume_from_checkpoint))
+
+        logger.info(f"Resuming from checkpoint: {checkpoint_to_load}")
+        checkpoint = torch.load(checkpoint_to_load, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch']
+
+        # Load previous losses and metrics if metadata file exists
+        metadata_path = os.path.join(metadata_dir, 'training_metadata.npy')
+        if os.path.exists(metadata_path):
+            logger.info(f"Loading metadata from {metadata_path}")
+            metadata = np.load(metadata_path, allow_pickle=True).item()
+            train_losses = metadata.get('train_losses', [])[:start_epoch]
+            val_losses = metadata.get('val_losses', [])[:start_epoch]
+            test_metrics_history = defaultdict(list, metadata.get('test_metrics_history', {}))
+            # Ensure lists in test_metrics_history are correct length
+            for key in test_metrics_history:
+                # Calculate how many times metrics should have been saved up to start_epoch
+                num_metrics_expected = (start_epoch - 1) // save_image_every + 1 if start_epoch > 0 else 0
+                if start_epoch == 1 and 1 % save_image_every != 0: # epoch 1 is a special case
+                     num_metrics_expected = 1
+                test_metrics_history[key] = test_metrics_history[key][:num_metrics_expected]
+
+    for epoch in tqdm.tqdm(range(start_epoch, n_epochs), desc="Training Epochs"):
         model.train()
         total_train_loss = 0.0
         num_train_batches = 0

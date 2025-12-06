@@ -47,7 +47,7 @@ def create_unet_adm(
             attention_ds.append(image_size // int(res))
     else:
         raise NotImplementedError
-    
+
     in_channels = 1 if grayscale else 3
     out_channels = 2*in_channels if learn_sigma else in_channels
 
@@ -73,6 +73,7 @@ def create_unet_adm(
 
     try:
         model.load_state_dict(torch.load(model_path, map_location='cpu'))
+        print(f"Loaded pre-trained UNet ADM model from {model_path}")
     except Exception as e:
         print(f"Got exception: {e} / Randomly initialize")
     return model

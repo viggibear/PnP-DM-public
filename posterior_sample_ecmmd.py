@@ -12,12 +12,38 @@ from hydra.core.hydra_config import HydraConfig
 from monai.metrics import PSNRMetric, SSIMMetric
 from taming.modules.losses.lpips import LPIPS
 
+def calculate_variance(ecmmd_model, y_n, num_samples=100, operator=None, measurement_space=True):
+    """
+    Estimate variance across samples from ecmmd_model.
+    If measurement_space=True, push samples through operator.forward and return variance in measurement domain
+    (this is what you want when comparing to measurement noise_sigma).
+    """
+    if measurement_space and operator is None:
+        raise ValueError("operator must be provided when measurement_space=True")
+
+    samples = []
+    for _ in range(num_samples):
+        # batch size assumed equal to y_n.batch (usually 1)
+        batch_eta = torch.randn(y_n.size(0), ecmmd_model.eta_dim).to(y_n.device)
+        sample = ecmmd_model.forward(y_n, batch_eta)  # returns in model/image space (same space as ref_img used earlier)
+        samples.append(sample)
+    samples = torch.cat(samples, dim=0)  # shape (num_samples * batch, C, H, W)
+
+    if measurement_space:
+        # compute variance in measurement domain so it's comparable to noise_sigma**2
+        with torch.no_grad():
+            meas = operator.forward(samples)  # shape (num_samples * batch, C, H, W)
+            return meas
+    else:
+        return samples
+
 @hydra.main(version_base="1.2", config_path="configs", config_name="default")
 def posterior_sample(cfg):
     # load configurations
     data_config = cfg.data
     task_config = cfg.task
     model_config = cfg.model
+    ecmmd_config = cfg.ecmmd
     sampler_config = cfg.sampler
 
     # device setting
@@ -27,6 +53,7 @@ def posterior_sample(cfg):
     # prepare task (forward model and noise)
     operator = get_operator(**task_config.operator, device=device)
     noiser = get_noise(**task_config.noise)
+    noise_sigma = task_config.noise.sigma
 
     # prepare dataloader
     transform = transforms.Compose([
@@ -52,6 +79,11 @@ def posterior_sample(cfg):
     model = model.to(device)
     model.eval()
 
+    # load edm model
+    ecmmd_model = get_model(**ecmmd_config)
+    ecmmd_model = ecmmd_model.to(device)
+    ecmmd_model.eval()
+
     # load sampler
     sampler = get_sampler(sampler_config, model=model, operator=operator, noiser=noiser, device=device)
 
@@ -61,7 +93,7 @@ def posterior_sample(cfg):
     logger = logging.getLogger(exp_name)
     out_path = os.path.join("results", exp_name)
     os.makedirs(out_path, exist_ok=True)
-    for img_dir in ['gt', 'meas', 'recon', 'progress']:
+    for img_dir in ['gt', 'meas', 'recon', 'progress', 'ecmmd_test']:
         os.makedirs(os.path.join(out_path, img_dir), exist_ok=True)
     print(f"Results are saved to {out_path}")
 
@@ -80,12 +112,37 @@ def posterior_sample(cfg):
         ref_img = ref_img.to(device)
         cmap = 'gray' if ref_img.shape[1] == 1 else None
 
+        logger.info(f"The shape of the reference image: {ref_img.shape}")
+
         # regenerate kernel for motion blur
         if isinstance(operator, MotionBlurCircular):
             operator.generate_kernel_(seed=i)
 
         # forward measurement model (Ax + n)
         y_n = noiser(operator.forward(ref_img))
+
+        # estimate variance of ECMMD model
+        if cfg.ecmmd_estimate_variance:
+            logger.info(f"Estimating variance of ECMMD model with {cfg.ecmmd_variance_num_samples} samples...")
+            meas_samples = calculate_variance(ecmmd_model, y_n, num_samples=cfg.ecmmd_variance_num_samples, operator=operator, measurement_space=True)
+            # Calculate pixel-wise variance for visualization
+            variance = torch.var(meas_samples, dim=0, unbiased=True)
+            # Calculate max eigenvalue of covariance matrix using Gram matrix trick
+            N = meas_samples.shape[0]
+            X = meas_samples.reshape(N, -1)
+            X_centered = X - X.mean(dim=0, keepdim=True)
+            assert X_centered.mean().abs() < 1e-6, "Data not centered properly"
+            G = (X_centered @ X_centered.T) / (N - 1)
+            max_eigenvalue = torch.linalg.eigvalsh(G).max().clamp(min=0)
+
+            rho_scale = max_eigenvalue.sqrt().item() / noise_sigma
+            logger.info(f"Estimated variance scale (rho_scale): {rho_scale}")
+
+            plt.imsave(os.path.join(out_path, 'ecmmd_test', file_idx+"_ecmmd_variance.png"), variance.permute(1, 2, 0).squeeze().cpu().numpy(), cmap=cmap)
+
+        # Do a 1 pass ECMMD to see if everything is working fine
+        ecmmd_onepass_test = ecmmd_model.forward(y_n, torch.randn(1, ecmmd_model.eta_dim).to(y_n.device))
+        plt.imsave(os.path.join(out_path, 'ecmmd_test', file_idx+"_ecmmd_test.png"), inv_transform(ecmmd_onepass_test).permute(0, 2, 3, 1).squeeze().cpu().numpy(), cmap=cmap)
 
         # logging
         log = defaultdict(list)
@@ -116,6 +173,7 @@ def posterior_sample(cfg):
                 fname=file_idx+f'_run_{j}',
                 save_root=out_path,
                 inv_transform=inv_transform,
+                rho_scale=rho_scale if cfg.ecmmd_estimate_variance else 1.0,
                 metrics=metrics
             )
             samples = inv_transform(samples)

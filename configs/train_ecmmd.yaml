@@ -1,12 +1,13 @@
 gpu: 0
-add_exp_name: ''
+add_exp_name: 'iter15to17'
 
 train_ratio: 0.7
 val_ratio: 0.1
-epochs: 1000
-eta_dim: 8
+epochs: 500
+eta_dim: 100
 batch_size: 32
 num_workers: 4
+# resume_from_checkpoint: results/ecmmd_ffhq-gs-eta100-ecmmd_denoising_generator_epochs200
 optimizer:
   name: adamw
   lr: 1e-4

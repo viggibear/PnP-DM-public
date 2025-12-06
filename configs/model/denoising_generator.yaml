@@ -1,0 +1,6 @@
+name: denoising_generator
+eta_dim: 100 # Dimension of the noise vector 'eta'
+image_size: 256
+num_channels: 64         # Base channel count, lower this to reduce model size
+grayscale: True
+# model_path: /project/promit/Research-Vignesh/PnP-DM-public/results/ecmmd_ffhq-gs-eta100-ecmmd_denoising_generator_epochs500/checkpoints/model_epoch_0100.pth

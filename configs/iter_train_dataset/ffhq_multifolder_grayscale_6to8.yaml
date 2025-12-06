@@ -1,0 +1,8 @@
+name: ffhq_multifolder
+grayscale: true
+head: 2148
+root: /project/promit/Research-Vignesh/PnP-DM-public/results/ffhq-gs_gblur-circ_isigma=sigma=0.2_pnp-edm-edm_sde-rho0=5-rhomin=0.3_anneal-light-0.9-samples/progress
+subfolders:
+  - 'iter6'
+  - 'iter7'
+  - 'iter8'

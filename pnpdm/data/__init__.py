@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from glob import glob
 from PIL import Image
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import VisionDataset
 
@@ -73,10 +73,49 @@ class FFHQDataset(VisionDataset):
 
         return img
 
+@register_dataset(name='ffhq_multifolder')
+class FFHQMultiFolderDataset(VisionDataset):
+    def __init__(self, root: str, subfolders: List[str], head: int = None, grayscale: bool = False, transform: Optional[Callable] = None):
+        super().__init__(root, transform=transform)
+        self.grayscale = grayscale
+        self.fpaths = []
+        for subfolder in subfolders:
+            curr = sorted(glob(root + f'/{subfolder}/**/*.png', recursive=True))
+            if head is not None:
+                curr = curr[:head]
+            self.fpaths += curr
+        if head is not None:
+            self.fpaths = self.fpaths[:head]
+        assert len(self.fpaths) > 0, "File list is empty. Check the root."
+
+    @property
+    def display_name(self):
+        if self.grayscale:
+            return 'ffhq-multifolder-gs'
+        else:
+            return 'ffhq-multifolder'
+
+    def __len__(self):
+        return len(self.fpaths)
+
+    def __getitem__(self, index: int):
+        fpath = self.fpaths[index]
+        if self.grayscale:
+            img = Image.open(fpath).convert("L")
+            img = torch.from_numpy(np.array(img).astype(np.float32))[None] / 255.0
+        else:
+            img = Image.open(fpath).convert('RGB')
+            img = torch.from_numpy(np.array(img).astype(np.float32)).permute(2, 0, 1) / 255.0
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img
+
 class ECMMDDataset(VisionDataset):
     def __init__(self, dataset: VisionDataset, eta_dim: int, operator: Callable, noiser: Callable):
         self.dataset = dataset
-        self.eta = torch.randn(len(dataset), eta_dim, eta_dim)
+        self.eta = torch.randn(len(dataset), eta_dim)
         self.operator = operator
         self.noiser = noiser
 
@@ -98,3 +137,30 @@ class ECMMDDataset(VisionDataset):
         torch.manual_seed(noise_seed)
         dirty = self.noiser(self.operator.forward(img))
         return img, dirty, eta
+
+class ECMMDIterTrainDataset(VisionDataset):
+    def __init__(self, dataset: VisionDataset, mid_iter_dataset: VisionDataset, eta_dim: int):
+        self.dataset = dataset
+        self.mid_iter_dataset = mid_iter_dataset
+        self.eta = torch.randn(len(dataset), eta_dim)
+
+    @property
+    def display_name(self):
+        return self.dataset.display_name + '-' + self.mid_iter_dataset.display_name + f'-eta{self.eta.shape[1]}-ecmmd-itertrain'
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index: int):
+        img = self.dataset[index]
+        eta = self.eta[index]
+        # Get image name from the original dataset
+        img_name = self.dataset.fpaths[index].split('/')[-1][:-4]
+        # There are multiple mid-iteration images for the same original image
+        # Return that index
+        mid_iter_imgs = [i for i, f in enumerate(self.mid_iter_dataset.fpaths) if img_name in f]
+        if not mid_iter_imgs:
+            raise ValueError(f"No mid-iteration images found for {img_name}")
+        mid_iter_index = np.random.choice(mid_iter_imgs)
+        mid_iter_img = self.mid_iter_dataset[mid_iter_index]
+        return img, mid_iter_img, eta

@@ -1,4 +1,4 @@
 name: ffhq
+head: 100
 grayscale: true
-# head: 3200
-root: /home/viggibear/Downloads/flickrfaceshq-dataset-ffhq
+root: /project/promit/research_data/ffhq

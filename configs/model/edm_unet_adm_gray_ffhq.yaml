@@ -16,7 +16,7 @@ dropout: 0.0
 resblock_updown: True
 use_fp16: False
 use_new_attention_order: False
-model_path: /home/viggibear/Research/PnP-DM-public/checkpoints/ffhq-gray.pt
+model_path: /project/promit/Research-Vignesh/checkpoints/ffhq-gray.pt
 grayscale: True
 
 diffusion:

@@ -1,3 +1,4 @@
 name: ffhq
-head: 100
-root: path/to/ffhq/dataset
+head: 1000
+# root: path/to/ffhq/dataset
+root: /home/vravi/research_data/flickrfaceshq-dataset-ffhq
