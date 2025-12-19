@@ -130,12 +130,26 @@ def posterior_sample(cfg):
             # Calculate max eigenvalue of covariance matrix using Gram matrix trick
             N = meas_samples.shape[0]
             X = meas_samples.reshape(N, -1)
-            X_centered = X - X.mean(dim=0, keepdim=True)
-            assert X_centered.mean().abs() < 1e-6, "Data not centered properly"
-            G = (X_centered @ X_centered.T) / (N - 1)
-            max_eigenvalue = torch.linalg.eigvalsh(G).max().clamp(min=0)
+            # X_centered = X - X.mean(dim=0, keepdim=True)
+            # assert X_centered.mean().abs() < 1e-6, "Data not centered properly"
 
-            rho_scale = max_eigenvalue.sqrt().item() / noise_sigma
+
+            for i, random_clean_img in enumerate(dataset):
+                if i == 0:
+                    break
+
+            random_clean_img = random_clean_img.to(device)
+            X_centered = X - random_clean_img.reshape(1, -1)
+            print("My X has shape:", X_centered.shape)
+
+            # Take column-wise L2-norm of X_centered
+            X_col_wise_norms = torch.norm(X_centered, dim=0, keepdim=True) ** 2 / (N - 1)
+            print("My X_col_wise_norms has shape:", X_col_wise_norms.shape)
+            print("The largest column-wise norm is:", X_col_wise_norms.max().item())
+            print("The smallest column-wise norm is:", X_col_wise_norms.min().item())
+            print("The median column-wise norm is:", X_col_wise_norms.median().item())
+
+            rho_scale = X_col_wise_norms.median().sqrt().item() / noise_sigma
             logger.info(f"Estimated variance scale (rho_scale): {rho_scale}")
 
             plt.imsave(os.path.join(out_path, 'ecmmd_test', file_idx+"_ecmmd_variance.png"), variance.permute(1, 2, 0).squeeze().cpu().numpy(), cmap=cmap)
